@@ -29,9 +29,10 @@ async def sync_jobs(scheduler: AsyncIOScheduler, run_fn: Callable[[str], Awaitab
     db_ids = {c["id"]: c for c in crawlers}
     job_ids = {job.id for job in scheduler.get_jobs()}
 
-    for crawler_id, crawler in db_ids.items():
-        if crawler_id not in job_ids:
-            _add_job(scheduler, crawler, run_fn)
-
     for job_id in job_ids - db_ids.keys():
         scheduler.remove_job(job_id)
+
+    for crawler_id, crawler in db_ids.items():
+        if crawler_id in job_ids:
+            scheduler.remove_job(crawler_id)
+        _add_job(scheduler, crawler, run_fn)

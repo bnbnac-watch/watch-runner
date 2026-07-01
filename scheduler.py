@@ -3,11 +3,13 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import db
 
+_TZ = "Asia/Seoul"
+
 
 def _add_job(scheduler: AsyncIOScheduler, crawler: dict, run_fn: Callable[[str], Awaitable[None]]):
     scheduler.add_job(
         run_fn,
-        CronTrigger.from_crontab(crawler["schedule"]),
+        CronTrigger.from_crontab(crawler["schedule"], timezone=_TZ),
         args=[crawler["id"]],
         id=crawler["id"],
         max_instances=1,
@@ -16,7 +18,7 @@ def _add_job(scheduler: AsyncIOScheduler, crawler: dict, run_fn: Callable[[str],
 
 
 async def create_scheduler(run_fn: Callable[[str], Awaitable[None]]) -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler()
+    scheduler = AsyncIOScheduler(timezone=_TZ)
     for crawler in await db.get_enabled_crawlers():
         _add_job(scheduler, crawler, run_fn)
     return scheduler

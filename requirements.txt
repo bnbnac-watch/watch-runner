@@ -1,0 +1,5 @@
+apscheduler>=3.10,<4
+asyncpg
+httpx
+fastapi
+uvicorn

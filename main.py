@@ -1,9 +1,13 @@
+import logging
 import os
 from contextlib import asynccontextmanager
 import httpx
 import uvicorn
 from fastapi import FastAPI
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
 import db
 import executor
@@ -32,14 +36,18 @@ async def _notify_error(crawler_id: str, error: str, fail_count: int):
 
 
 async def run_crawler(crawler_id: str):
+    logger.info("[%s] job 시작", crawler_id)
     try:
         items = await executor.execute(crawler_id)
         new_items = await deduplicator.filter_new(crawler_id, items)
+        logger.info("[%s] 새 아이템 %d개 (전체 %d개)", crawler_id, len(new_items), len(items))
         if new_items:
             await _notify_items(crawler_id, new_items)
             await deduplicator.mark_seen(crawler_id, [item["id"] for item in new_items])
         await db.update_success(crawler_id)
+        logger.info("[%s] job 완료", crawler_id)
     except Exception as e:
+        logger.error("[%s] 오류: %s", crawler_id, e)
         fail_count = await db.increment_fail_count(crawler_id)
         try:
             await _notify_error(crawler_id, str(e), fail_count)

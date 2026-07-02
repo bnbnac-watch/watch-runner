@@ -13,11 +13,23 @@ def get_pool() -> asyncpg.Pool:
     return _pool
 
 
-async def get_enabled_crawlers() -> list[asyncpg.Record]:
+async def get_enabled_crawlers() -> list[dict]:
     async with _pool.acquire() as conn:
-        return await conn.fetch(
-            "SELECT id, name, schedule FROM crawlers WHERE enabled = true"
+        rows = await conn.fetch(
+            "SELECT id, name, schedule, container, params, post_process, batch_group "
+            "FROM crawlers WHERE enabled = true"
         )
+        return [dict(r) for r in rows]
+
+
+async def get_crawlers_by_batch_group(group: str) -> list[dict]:
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, name, schedule, container, params, post_process, batch_group "
+            "FROM crawlers WHERE batch_group = $1 AND enabled = true",
+            group,
+        )
+        return [dict(r) for r in rows]
 
 
 async def update_success(crawler_id: str):

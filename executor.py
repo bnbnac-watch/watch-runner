@@ -4,9 +4,11 @@ import httpx
 _semaphore = asyncio.Semaphore(2)
 
 
-async def execute(crawler_id: str) -> list[dict]:
+async def execute(crawler: dict) -> list[dict]:
+    target = crawler.get("container") or crawler["id"]
+    params = crawler.get("params") or {}
     async with _semaphore:
         async with httpx.AsyncClient(timeout=60) as client:
-            res = await client.post(f"http://{crawler_id}:8080/crawl")
+            res = await client.post(f"http://{target}:8080/crawl", json=params)
             res.raise_for_status()
             return res.json()

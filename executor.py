@@ -5,7 +5,7 @@ _semaphore = asyncio.Semaphore(2)
 
 
 async def execute(crawler: dict) -> list[dict]:
-    target = crawler.get("container") or crawler["id"]
+    target = crawler["container"]
     params = crawler.get("params") or {}
     async with _semaphore:
         async with httpx.AsyncClient(timeout=60) as client:

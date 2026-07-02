@@ -12,7 +12,7 @@ def _add_job(scheduler: AsyncIOScheduler, crawler: dict, run_fn: Callable[[dict]
         run_fn,
         CronTrigger.from_crontab(crawler["schedule"], timezone=_TZ),
         args=[crawler],
-        id=crawler["id"],
+        id=str(crawler["id"]),
         max_instances=1,
         misfire_grace_time=30,
     )
@@ -60,15 +60,15 @@ async def sync_jobs(scheduler: AsyncIOScheduler, run_fn: Callable[[dict], Awaita
         else:
             batch_groups[crawler["batch_group"]].append(crawler)
 
-    db_job_ids = {c["id"] for c in independent} | {f"batch:{g}" for g in batch_groups}
+    db_job_ids = {str(c["id"]) for c in independent} | {f"batch:{g}" for g in batch_groups}
     current_job_ids = {job.id for job in scheduler.get_jobs()}
 
     for job_id in current_job_ids - db_job_ids:
         scheduler.remove_job(job_id)
 
     for crawler in independent:
-        if crawler["id"] in current_job_ids:
-            scheduler.remove_job(crawler["id"])
+        if str(crawler["id"]) in current_job_ids:
+            scheduler.remove_job(str(crawler["id"]))
         _add_job(scheduler, crawler, run_fn)
 
     for group_name, group_crawlers in batch_groups.items():

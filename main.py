@@ -23,31 +23,31 @@ WATCH_SENDER_URL = os.getenv("WATCH_SENDER_URL", "http://watch-sender:8080")
 _summarize_sem = asyncio.Semaphore(SUMMARIZE_CONCURRENCY)
 
 _scheduler: AsyncIOScheduler | None = None
+_http_client: httpx.AsyncClient | None = None
 
 
 async def _notify_items(crawler_id: str, items: list[dict]):
-    async with httpx.AsyncClient(timeout=10) as client:
-        await client.post(
-            f"{WATCH_SENDER_URL}/notify",
-            json={"crawler_id": crawler_id, "items": items},
-        )
+    await _http_client.post(
+        f"{WATCH_SENDER_URL}/notify",
+        json={"crawler_id": crawler_id, "items": items},
+        timeout=10,
+    )
 
 
 async def _notify_error(crawler_id: str, error: str, fail_count: int):
-    async with httpx.AsyncClient(timeout=10) as client:
-        await client.post(
-            f"{WATCH_SENDER_URL}/error",
-            json={"crawler_id": crawler_id, "error": error, "fail_count": fail_count},
-        )
+    await _http_client.post(
+        f"{WATCH_SENDER_URL}/error",
+        json={"crawler_id": crawler_id, "error": error, "fail_count": fail_count},
+        timeout=10,
+    )
 
 
 async def _summarize(url: str) -> str | None:
     async with _summarize_sem:
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                res = await client.post(f"{WATCH_AI_URL}/summarize", json={"url": url})
-                res.raise_for_status()
-                return res.json().get("result")
+            res = await _http_client.post(f"{WATCH_AI_URL}/summarize", json={"url": url}, timeout=120)
+            res.raise_for_status()
+            return res.json().get("result")
         except Exception as e:
             logger.error("watch-ai 호출 실패 (%s): %s", url, e)
             return None
@@ -107,8 +107,7 @@ async def run_batch(group_name: str):
 
     if entries:
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(f"{WATCH_SENDER_URL}/notify/batch", json={"entries": entries})
+            await _http_client.post(f"{WATCH_SENDER_URL}/notify/batch", json={"entries": entries}, timeout=10)
         except Exception as e:
             logger.error("[batch:%s] 발송 실패: %s", group_name, e)
 
@@ -117,12 +116,15 @@ async def run_batch(group_name: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _scheduler
+    global _scheduler, _http_client
     await db.init()
-    _scheduler = await create_scheduler(run_crawler, run_batch)
-    _scheduler.start()
-    yield
-    _scheduler.shutdown()
+    async with httpx.AsyncClient() as client:
+        _http_client = client
+        executor.set_client(client)
+        _scheduler = await create_scheduler(run_crawler, run_batch)
+        _scheduler.start()
+        yield
+        _scheduler.shutdown()
 
 
 app = FastAPI(lifespan=lifespan)

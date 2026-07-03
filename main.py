@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -15,8 +16,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 MAX_FAIL_COUNT = int(os.getenv("MAX_FAIL_COUNT", "5"))
+SUMMARIZE_CONCURRENCY = int(os.getenv("SUMMARIZE_CONCURRENCY", "4"))
 WATCH_AI_URL = os.getenv("WATCH_AI_URL", "http://watch-ai:8080")
 WATCH_SENDER_URL = os.getenv("WATCH_SENDER_URL", "http://watch-sender:8080")
+
+_summarize_sem = asyncio.Semaphore(SUMMARIZE_CONCURRENCY)
 
 _scheduler: AsyncIOScheduler | None = None
 
@@ -38,14 +42,15 @@ async def _notify_error(crawler_id: str, error: str, fail_count: int):
 
 
 async def _summarize(url: str) -> str | None:
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            res = await client.post(f"{WATCH_AI_URL}/summarize", json={"url": url})
-            res.raise_for_status()
-            return res.json().get("result")
-    except Exception as e:
-        logger.error("watch-ai 호출 실패 (%s): %s", url, e)
-        return None
+    async with _summarize_sem:
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                res = await client.post(f"{WATCH_AI_URL}/summarize", json={"url": url})
+                res.raise_for_status()
+                return res.json().get("result")
+        except Exception as e:
+            logger.error("watch-ai 호출 실패 (%s): %s", url, e)
+            return None
 
 
 async def run_crawler(crawler: dict):
@@ -58,8 +63,9 @@ async def run_crawler(crawler: dict):
         if new_items:
             post = crawler.get("post_process") or {}
             if post.get("type") == "summarize":
-                for item in new_items:
-                    item["summary"] = await _summarize(item["url"])
+                summaries = await asyncio.gather(*[_summarize(item["url"]) for item in new_items])
+                for item, summary in zip(new_items, summaries):
+                    item["summary"] = summary
             await _notify_items(crawler_id, new_items)
             await deduplicator.mark_seen(crawler_id, [item["id"] for item in new_items])
         await db.update_success(crawler_id)
@@ -89,8 +95,9 @@ async def run_batch(group_name: str):
             if new_items:
                 post = crawler.get("post_process") or {}
                 if post.get("type") == "summarize":
-                    for item in new_items:
-                        item["summary"] = await _summarize(item["url"])
+                    summaries = await asyncio.gather(*[_summarize(item["url"]) for item in new_items])
+                    for item, summary in zip(new_items, summaries):
+                        item["summary"] = summary
                 await deduplicator.mark_seen(crawler_id, [item["id"] for item in new_items])
                 entries.append({"crawler_id": crawler_id, "items": new_items})
             await db.update_success(crawler_id)

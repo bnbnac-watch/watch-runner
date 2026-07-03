@@ -1,7 +1,7 @@
 import asyncio
 import httpx
 
-_semaphore = asyncio.Semaphore(2)
+_semaphore = asyncio.Semaphore(1)
 _http_client: httpx.AsyncClient | None = None
 
 

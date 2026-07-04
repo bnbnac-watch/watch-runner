@@ -1,12 +1,20 @@
+import json
 import os
 import asyncpg
 
 _pool: asyncpg.Pool | None = None
 
 
+async def _init_conn(conn: asyncpg.Connection):
+    # asyncpg는 JSONB를 str로 반환하므로 dict로 자동 변환하는 코덱 등록
+    await conn.set_type_codec(
+        "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+    )
+
+
 async def init():
     global _pool
-    _pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
+    _pool = await asyncpg.create_pool(os.environ["DATABASE_URL"], init=_init_conn)
 
 
 def get_pool() -> asyncpg.Pool:

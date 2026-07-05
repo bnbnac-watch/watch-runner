@@ -53,11 +53,23 @@ async def _summarize(url: str) -> str | None:
             return None
 
 
+def _apply_filter(crawler: dict, items: list[dict]) -> list[dict]:
+    flt = crawler.get("filter") or {}
+    keywords = flt.get("title_keywords")
+    if keywords:
+        items = [
+            item for item in items
+            if any(k.lower() in item["title"].lower() for k in keywords)
+        ]
+    return items
+
+
 async def run_crawler(crawler: dict):
     crawler_id = crawler["id"]
     logger.info("[%s] job 시작", crawler_id)
     try:
         items = await executor.execute(crawler)
+        items = _apply_filter(crawler, items)
         new_items = await deduplicator.filter_new(crawler_id, items)
         logger.info("[%s] 새 아이템 %d개 (전체 %d개)", crawler_id, len(new_items), len(items))
         if new_items:
@@ -90,6 +102,7 @@ async def run_batch(group_name: str):
         crawler_id = crawler["id"]
         try:
             items = await executor.execute(crawler)
+            items = _apply_filter(crawler, items)
             new_items = await deduplicator.filter_new(crawler_id, items)
             logger.info("[%s] 새 아이템 %d개", crawler_id, len(new_items))
             if new_items:

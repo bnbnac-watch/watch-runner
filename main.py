@@ -96,6 +96,7 @@ async def run_crawler(crawler: dict):
 async def run_batch(group_name: str):
     logger.info("[batch:%s] 시작", group_name)
     crawlers = await db.get_crawlers_by_batch_group(group_name)
+    crawler_ids = [c["id"] for c in crawlers]
     entries = []
 
     for crawler in crawlers:
@@ -103,7 +104,7 @@ async def run_batch(group_name: str):
         try:
             items = await executor.execute(crawler)
             items = _apply_filter(crawler, items)
-            new_items = await deduplicator.filter_new(crawler_id, items)
+            new_items = await deduplicator.filter_new_batch(crawler_ids, items)
             logger.info("[%s] 새 아이템 %d개", crawler_id, len(new_items))
             if new_items:
                 post = crawler.get("post_process") or {}
@@ -111,7 +112,7 @@ async def run_batch(group_name: str):
                     summaries = await asyncio.gather(*[_summarize(item["url"]) for item in new_items])
                     for item, summary in zip(new_items, summaries):
                         item["summary"] = summary
-                await deduplicator.mark_seen(crawler_id, [item["id"] for item in new_items])
+                await deduplicator.mark_seen_batch(crawler_ids, [item["id"] for item in new_items])
                 entries.append({"crawler_id": crawler_id, "items": new_items})
             await db.update_success(crawler_id)
         except Exception as e:

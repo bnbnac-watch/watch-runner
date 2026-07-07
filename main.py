@@ -112,7 +112,7 @@ async def run_batch(group_name: str):
                     summaries = await asyncio.gather(*[_summarize(item["url"]) for item in new_items])
                     for item, summary in zip(new_items, summaries):
                         item["summary"] = summary
-                await deduplicator.mark_seen_batch(crawler_ids, [item["id"] for item in new_items])
+                await deduplicator.mark_seen_batch([crawler_id], [item["id"] for item in new_items])
                 entries.append({"crawler_id": crawler_id, "items": new_items})
             await db.update_success(crawler_id)
         except Exception as e:

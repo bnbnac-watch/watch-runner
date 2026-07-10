@@ -1,9 +1,30 @@
+import logging
+
 import db
+
+logger = logging.getLogger(__name__)
+
+
+def _dedupe_by_id(items: list[dict]) -> list[dict]:
+    seen_ids = set()
+    deduped = []
+    for item in items:
+        if item["id"] in seen_ids:
+            continue
+        seen_ids.add(item["id"])
+        deduped.append(item)
+    if len(deduped) != len(items):
+        logger.warning(
+            "크롤링 결과 내 id 중복 %d개 제거 (%d -> %d)",
+            len(items) - len(deduped), len(items), len(deduped),
+        )
+    return deduped
 
 
 async def filter_new(crawler_id: str, items: list[dict]) -> list[dict]:
     if not items:
         return []
+    items = _dedupe_by_id(items)
     item_ids = [item["id"] for item in items]
     async with db.get_pool().acquire() as conn:
         rows = await conn.fetch(
@@ -26,6 +47,7 @@ async def mark_seen(crawler_id: str, item_ids: list[str]):
 async def filter_new_batch(crawler_ids: list[int], items: list[dict]) -> list[dict]:
     if not items:
         return []
+    items = _dedupe_by_id(items)
     item_ids = [item["id"] for item in items]
     async with db.get_pool().acquire() as conn:
         rows = await conn.fetch(

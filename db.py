@@ -43,16 +43,17 @@ async def get_crawlers_by_batch_group(group: str) -> list[dict]:
 async def update_success(crawler_id: int):
     async with _pool.acquire() as conn:
         await conn.execute(
-            "UPDATE crawlers SET last_run = NOW(), fail_count = 0 WHERE id = $1",
+            "UPDATE crawlers SET last_run = NOW(), fail_count = 0, last_error = NULL WHERE id = $1",
             crawler_id,
         )
 
 
-async def increment_fail_count(crawler_id: int) -> int:
+async def increment_fail_count(crawler_id: int, error_msg: str) -> int:
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
-            "UPDATE crawlers SET fail_count = fail_count + 1 WHERE id = $1 RETURNING fail_count",
-            crawler_id,
+            "UPDATE crawlers SET fail_count = fail_count + 1, last_error = $2 "
+            "WHERE id = $1 RETURNING fail_count",
+            crawler_id, error_msg,
         )
         return row["fail_count"]
 

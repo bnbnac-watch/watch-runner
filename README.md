@@ -77,7 +77,7 @@ DB의 `crawlers` 테이블을 다시 읽어 스케줄러 잡을 갱신한다(`sy
 
 ## 실패 처리
 
-크롤러 호출/파싱이 예외를 던지면 `fail_count`를 증가시키고 `watch-sender`의 `/error`로 알림을 보낸다. `fail_count`가 `MAX_FAIL_COUNT`에 도달하면 해당 크롤러를 `enabled=false`로 비활성화한다(다음 `/reload` 또는 재시작 시 스케줄러에서 빠짐). 성공 시 `fail_count`는 0으로 리셋된다.
+크롤러 호출/파싱이 예외를 던지면 `fail_count`를 증가시키고 예외 메시지를 `crawlers.last_error`에 기록한 뒤 `watch-sender`의 `/error`로 알림을 보낸다. `fail_count`가 `MAX_FAIL_COUNT`에 도달하면 해당 크롤러를 `enabled=false`로 비활성화한다(다음 `/reload` 또는 재시작 시 스케줄러에서 빠짐). 성공 시 `fail_count`는 0으로 리셋되고 `last_error`도 `NULL`로 지워진다. `last_error`는 `watch-admin`의 크롤러 목록 화면에서 확인할 수 있다.
 
 ## 알려진 제약
 

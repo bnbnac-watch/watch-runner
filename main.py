@@ -84,7 +84,7 @@ async def run_crawler(crawler: dict):
         logger.info("[%s] job 완료", crawler_id)
     except Exception as e:
         logger.error("[%s] 오류: %s", crawler_id, e)
-        fail_count = await db.increment_fail_count(crawler_id)
+        fail_count = await db.increment_fail_count(crawler_id, str(e))
         try:
             await _notify_error(crawler_id, str(e), fail_count)
         except Exception:
@@ -117,7 +117,7 @@ async def run_batch(group_name: str):
             await db.update_success(crawler_id)
         except Exception as e:
             logger.error("[%s] 오류: %s", crawler_id, e)
-            await db.increment_fail_count(crawler_id)
+            await db.increment_fail_count(crawler_id, str(e))
 
     if entries:
         try:

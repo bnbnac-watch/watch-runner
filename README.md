@@ -82,3 +82,10 @@ DB의 `crawlers` 테이블을 다시 읽어 스케줄러 잡을 갱신한다(`sy
 ## 알려진 제약
 
 같은 `batch_group`에 속한 모든 `crawlers` row는 `schedule` 값이 동일해야 한다. 배치 잡은 그룹당 하나만 등록되고 그룹의 첫 row(`group_crawlers[0]`) schedule만 사용되는데, `db.get_enabled_crawlers()`에 정렬 기준이 없어 "첫 row"가 무엇인지 보장되지 않는다. 그룹 내 한 row만 schedule을 바꾸면 경고 없이 무시된다.
+
+## 테스트
+
+```bash
+pip install -r requirements-dev.txt
+pytest -v
+```

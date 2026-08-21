@@ -45,7 +45,7 @@ async def _notify_error(crawler_id: str, error: str, fail_count: int):
 async def _summarize(url: str) -> str | None:
     async with _summarize_sem:
         try:
-            # watch-ai의 SUMMARIZE_TIMEOUT_S(기본 100s)보다 반드시 커야 한다 — 안 그러면
+            # watch-ai의 SUMMARIZE_TIMEOUT_S(기본 110s)보다 반드시 커야 한다 — 안 그러면
             # 이 타임아웃이 watch-ai가 스스로 포기하기 전에 먼저 끊어버려서, watch-ai
             # 서버 쪽에 아무도 기다리지 않는 요청만 남기고 세마포어 슬롯을 낭비하게 된다.
             res = await _http_client.post(f"{WATCH_AI_URL}/summarize", json={"url": url}, timeout=120)

@@ -19,6 +19,12 @@ MAX_FAIL_COUNT = int(os.getenv("MAX_FAIL_COUNT", "5"))
 SUMMARIZE_CONCURRENCY = int(os.getenv("SUMMARIZE_CONCURRENCY", "4"))
 WATCH_AI_URL = os.getenv("WATCH_AI_URL", "http://watch-ai:8080")
 WATCH_SENDER_URL = os.getenv("WATCH_SENDER_URL", "http://watch-sender:8080")
+WATCH_GALLERY_URL = os.getenv("WATCH_GALLERY_URL", "http://watch-gallery:8080")
+
+# /extract_images 엔드포인트를 구현한 크롤러만 여기 추가한다. DB 스키마 변경 없이
+# 컨테이너 이름으로 판단 - 두 번째 크롤러가 필요해지면 crawlers 테이블에 플래그를
+# 추가하는 걸 고려할 것.
+IMAGE_CAPABLE_CONTAINERS = {"crawler-kakao-channels"}
 
 _summarize_sem = asyncio.Semaphore(SUMMARIZE_CONCURRENCY)
 
@@ -53,6 +59,47 @@ async def _summarize(url: str) -> str | None:
             return None
 
 
+async def _extract_images(container: str, url: str) -> list[str]:
+    try:
+        res = await _http_client.post(
+            f"http://{container}:8080/extract_images",
+            json={"url": url},
+            timeout=60,
+        )
+        res.raise_for_status()
+        return res.json().get("image_urls", [])
+    except Exception as e:
+        logger.warning("이미지 추출 실패 (%s): %s", url, e)
+        return []
+
+
+async def _build_image_grid(image_urls: list[str]) -> str | None:
+    try:
+        res = await _http_client.post(
+            f"{WATCH_GALLERY_URL}/build",
+            json={"image_urls": image_urls},
+            timeout=120,
+        )
+        res.raise_for_status()
+        return res.json().get("public_url")
+    except Exception as e:
+        logger.warning("이미지 그리드 생성 실패: %s", e)
+        return None
+
+
+async def _attach_image_summaries(container: str, items: list[dict]):
+    # watch-playwright가 단일 동시성이라(MAX_CONCURRENCY=1), 여기서도 순차 처리해
+    # 렌더 요청이 한꺼번에 몰리지 않게 한다.
+    for item in items:
+        image_urls = await _extract_images(container, item["url"])
+        if not image_urls:
+            continue
+        grid_url = await _build_image_grid(image_urls)
+        if not grid_url:
+            continue
+        item["summary"] = f"{item['summary']}\n{grid_url}" if item.get("summary") else grid_url
+
+
 def _apply_filter(crawler: dict, items: list[dict]) -> list[dict]:
     flt = crawler.get("filter") or {}
     keywords = flt.get("title_keywords")
@@ -78,6 +125,8 @@ async def run_crawler(crawler: dict):
                 summaries = await asyncio.gather(*[_summarize(item["url"]) for item in new_items])
                 for item, summary in zip(new_items, summaries):
                     item["summary"] = summary
+            if crawler["container"] in IMAGE_CAPABLE_CONTAINERS:
+                await _attach_image_summaries(crawler["container"], new_items)
             await _notify_items(crawler_id, new_items)
             await deduplicator.mark_seen(crawler_id, [item["id"] for item in new_items])
         await db.update_success(crawler_id)

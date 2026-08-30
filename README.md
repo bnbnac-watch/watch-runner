@@ -9,7 +9,7 @@
 ```
 run_crawler(crawler)
 ├── executor.execute(crawler)          → POST http://{container}:8080/crawl
-├── _apply_filter()                    → filter.title_keywords 매칭 아이템만 통과
+├── _apply_filter()                    → filter.title_keywords/description_keywords 매칭 아이템만 통과 (OR)
 ├── deduplicator.filter_new()          → seen_items와 비교해 새 아이템만 남김
 ├── post_process.type == "summarize"?  → watch-ai 병렬 호출(asyncio.gather)
 ├── watch-sender POST /notify

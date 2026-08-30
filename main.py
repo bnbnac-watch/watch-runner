@@ -105,13 +105,21 @@ async def _attach_image_summaries(container: str, items: list[dict]):
 
 def _apply_filter(crawler: dict, items: list[dict]) -> list[dict]:
     flt = crawler.get("filter") or {}
-    keywords = flt.get("title_keywords")
-    if keywords:
-        items = [
-            item for item in items
-            if any(k.lower() in item["title"].lower() for k in keywords)
-        ]
-    return items
+    title_keywords = flt.get("title_keywords")
+    description_keywords = flt.get("description_keywords")
+    if not title_keywords and not description_keywords:
+        return items
+
+    def matches(item: dict) -> bool:
+        if title_keywords and any(k.lower() in item["title"].lower() for k in title_keywords):
+            return True
+        if description_keywords:
+            description = (item.get("data") or {}).get("description") or ""
+            if any(k.lower() in description.lower() for k in description_keywords):
+                return True
+        return False
+
+    return [item for item in items if matches(item)]
 
 
 async def run_crawler(crawler: dict):

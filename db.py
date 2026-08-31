@@ -63,3 +63,22 @@ async def disable_crawler(crawler_id: int):
         await conn.execute(
             "UPDATE crawlers SET enabled = false WHERE id = $1", crawler_id
         )
+
+
+async def increment_summary_attempts(crawler_id: int, item_id: str) -> int:
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO pending_summaries (crawler_id, item_id, attempts) VALUES ($1, $2, 1) "
+            "ON CONFLICT (crawler_id, item_id) DO UPDATE SET attempts = pending_summaries.attempts + 1 "
+            "RETURNING attempts",
+            crawler_id, item_id,
+        )
+        return row["attempts"]
+
+
+async def clear_summary_attempts(crawler_id: int, item_id: str):
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM pending_summaries WHERE crawler_id = $1 AND item_id = $2",
+            crawler_id, item_id,
+        )

@@ -52,7 +52,11 @@ async def _notify_error(crawler_id: str, error: str, fail_count: int):
     )
 
 
-async def _summarize(url: str) -> str | None:
+class _PermanentSummaryFailure(Exception):
+    """자막 없음(404) 등 재시도해도 절대 성공할 수 없는 실패. 재시도 대상에서 제외하고 즉시 포기하기 위한 신호."""
+
+
+async def _call_summarize_api(url: str) -> str | None:
     async with _summarize_sem:
         try:
             # watch-ai의 SUMMARIZE_TIMEOUT_S(기본 110s)보다 반드시 커야 한다 — 안 그러면
@@ -61,18 +65,48 @@ async def _summarize(url: str) -> str | None:
             res = await _http_client.post(f"{WATCH_AI_URL}/summarize", json={"url": url}, timeout=120)
             res.raise_for_status()
             return res.json().get("result")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise _PermanentSummaryFailure(str(e)) from e
+            logger.error("watch-ai 호출 실패 (%s): %s", url, e)
+            return None
         except Exception as e:
             logger.error("watch-ai 호출 실패 (%s): %s", url, e)
             return None
 
 
+async def _summarize(url: str) -> str | None:
+    try:
+        return await _call_summarize_api(url)
+    except _PermanentSummaryFailure:
+        return None
+
+
+async def _resolve_item_summary(url: str) -> tuple[str | None, bool]:
+    """(summary, permanent) 반환. permanent=True면 자막 없음 등으로 재시도해도 소용없다는 뜻."""
+    try:
+        return await _call_summarize_api(url), False
+    except _PermanentSummaryFailure as e:
+        logger.warning("watch-ai 요약 불가(재시도 무의미): %s", e)
+        return None, True
+
+
 async def _resolve_summaries(crawler_id: int, items: list[dict]) -> list[dict]:
-    summaries = await asyncio.gather(*[_summarize(item["url"]) for item in items])
+    results = await asyncio.gather(*[_resolve_item_summary(item["url"]) for item in items])
     resolved = []
-    for item, summary in zip(items, summaries):
+    for item, (summary, permanent) in zip(items, results):
         if summary is not None:
             await db.clear_summary_attempts(crawler_id, item["id"])
             item["summary"] = summary
+            resolved.append(item)
+            continue
+
+        if permanent:
+            logger.warning(
+                "[%s] 요약 불가(자막 없음 등), 재시도 없이 포기하고 링크만 발송: %s", crawler_id, item["url"]
+            )
+            await db.clear_summary_attempts(crawler_id, item["id"])
+            item["summary"] = None
             resolved.append(item)
             continue
 
@@ -85,7 +119,7 @@ async def _resolve_summaries(crawler_id: int, items: list[dict]) -> list[dict]:
             item["summary"] = None
             resolved.append(item)
         else:
-            logger.info(
+            logger.warning(
                 "[%s] 요약 실패 %d/%d, 다음 크롤에서 재시도 보류: %s",
                 crawler_id, attempts, MAX_SUMMARY_ATTEMPTS, item["url"],
             )
@@ -198,6 +232,9 @@ async def run_batch(group_name: str):
             if new_items:
                 post = crawler.get("post_process") or {}
                 if post.get("type") == "summarize":
+                    # 주의: run_crawler()와 달리 여기는 보류/재시도 로직이 없다 — 요약 실패 시
+                    # 즉시 링크만 발송하고 영구 mark_seen된다. summarize를 쓰는 크롤러는
+                    # batch_group을 절대 설정하지 말 것(현재 DB상 전부 batch_group IS NULL).
                     summaries = await asyncio.gather(*[_summarize(item["url"]) for item in new_items])
                     for item, summary in zip(new_items, summaries):
                         item["summary"] = summary

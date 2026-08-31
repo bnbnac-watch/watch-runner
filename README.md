@@ -87,6 +87,8 @@ DB의 `crawlers` 테이블을 다시 읽어 스케줄러 잡을 갱신한다(`sy
 
 같은 `batch_group`에 속한 모든 `crawlers` row는 `schedule` 값이 동일해야 한다. 배치 잡은 그룹당 하나만 등록되고 그룹의 첫 row(`group_crawlers[0]`) schedule만 사용되는데, `db.get_enabled_crawlers()`에 정렬 기준이 없어 "첫 row"가 무엇인지 보장되지 않는다. 그룹 내 한 row만 schedule을 바꾸면 경고 없이 무시된다.
 
+`post_process.type == "summarize"`를 쓰는 크롤러(현재 `crawler-yt-channels`)의 재시도는 해당 아이템이 **다음 크롤 결과에 다시 나타나야만** 일어난다(`mark_seen`을 안 하므로 "새 아이템"으로 재감지되는 방식). 크롤러가 한 번에 가져오는 아이템 수가 제한적인 경우(예: 채널당 최신 N개), 보류 중인 아이템보다 새 영상이 그 사이 N개 이상 올라오면 다음 크롤 결과 자체에서 밀려나 버려서 재시도도 포기 발송도 일어나지 않고 조용히 유실될 수 있다 — 업로드가 잦은 채널일수록 이 위험이 커진다. `pending_summaries`에는 타임스탬프가 없어 이런 stale 행을 별도로 탐지할 방법도 없다.
+
 ## 테스트
 
 ```bash

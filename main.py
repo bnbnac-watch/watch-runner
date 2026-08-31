@@ -16,6 +16,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 MAX_FAIL_COUNT = int(os.getenv("MAX_FAIL_COUNT", "5"))
+# 요약이 이 횟수만큼 연속 실패하면 포기하고 요약 없이(링크만) 발송한다.
+# 재시도는 크롤 사이클 단위로 일어나므로(watch-ai 자체 재시도와 별개),
+# 실제 최대 지연 시간은 이 값 × 해당 크롤러의 크롤 주기다.
+MAX_SUMMARY_ATTEMPTS = int(os.getenv("MAX_SUMMARY_ATTEMPTS", "3"))
 SUMMARIZE_CONCURRENCY = int(os.getenv("SUMMARIZE_CONCURRENCY", "4"))
 WATCH_AI_URL = os.getenv("WATCH_AI_URL", "http://watch-ai:8080")
 WATCH_SENDER_URL = os.getenv("WATCH_SENDER_URL", "http://watch-sender:8080")
@@ -60,6 +64,32 @@ async def _summarize(url: str) -> str | None:
         except Exception as e:
             logger.error("watch-ai 호출 실패 (%s): %s", url, e)
             return None
+
+
+async def _resolve_summaries(crawler_id: int, items: list[dict]) -> list[dict]:
+    summaries = await asyncio.gather(*[_summarize(item["url"]) for item in items])
+    resolved = []
+    for item, summary in zip(items, summaries):
+        if summary is not None:
+            await db.clear_summary_attempts(crawler_id, item["id"])
+            item["summary"] = summary
+            resolved.append(item)
+            continue
+
+        attempts = await db.increment_summary_attempts(crawler_id, item["id"])
+        if attempts >= MAX_SUMMARY_ATTEMPTS:
+            logger.warning(
+                "[%s] 요약 %d회 실패, 포기하고 링크만 발송: %s", crawler_id, attempts, item["url"]
+            )
+            await db.clear_summary_attempts(crawler_id, item["id"])
+            item["summary"] = None
+            resolved.append(item)
+        else:
+            logger.info(
+                "[%s] 요약 실패 %d/%d, 다음 크롤에서 재시도 보류: %s",
+                crawler_id, attempts, MAX_SUMMARY_ATTEMPTS, item["url"],
+            )
+    return resolved
 
 
 async def _extract_images(container: str, url: str) -> list[str]:
@@ -133,13 +163,12 @@ async def run_crawler(crawler: dict):
         if new_items:
             post = crawler.get("post_process") or {}
             if post.get("type") == "summarize":
-                summaries = await asyncio.gather(*[_summarize(item["url"]) for item in new_items])
-                for item, summary in zip(new_items, summaries):
-                    item["summary"] = summary
-            if crawler["container"] in IMAGE_CAPABLE_CONTAINERS:
+                new_items = await _resolve_summaries(crawler_id, new_items)
+            if new_items and crawler["container"] in IMAGE_CAPABLE_CONTAINERS:
                 await _attach_image_summaries(crawler["container"], new_items)
-            await _notify_items(crawler_id, new_items)
-            await deduplicator.mark_seen(crawler_id, [item["id"] for item in new_items])
+            if new_items:
+                await _notify_items(crawler_id, new_items)
+                await deduplicator.mark_seen(crawler_id, [item["id"] for item in new_items])
         await db.update_success(crawler_id)
         logger.info("[%s] job 완료", crawler_id)
     except Exception as e:

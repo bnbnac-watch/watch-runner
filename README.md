@@ -11,9 +11,12 @@ run_crawler(crawler)
 ├── executor.execute(crawler)          → POST http://{container}:8080/crawl
 ├── _apply_filter()                    → filter.title_keywords/description_keywords 매칭 아이템만 통과 (OR)
 ├── deduplicator.filter_new()          → seen_items와 비교해 새 아이템만 남김
-├── post_process.type == "summarize"?  → watch-ai 병렬 호출(asyncio.gather)
-├── watch-sender POST /notify
-└── deduplicator.mark_seen()
+├── post_process.type == "summarize"?  → _resolve_summaries()로 watch-ai 병렬 호출
+│   ├── 성공 → pending_summaries 삭제, 이번 사이클에 발송
+│   ├── 실패 & attempts < MAX_SUMMARY_ATTEMPTS → 이번 사이클 발송 제외(= mark_seen도 안 함) → 다음 크롤에서 "새 아이템"으로 재시도
+│   └── 실패 & attempts >= MAX_SUMMARY_ATTEMPTS → 포기, 요약 없이(링크만) 이번 사이클에 발송
+├── watch-sender POST /notify           (요약 보류로 대상이 0개면 스킵)
+└── deduplicator.mark_seen()            (발송된 아이템만)
 ```
 
 ### 배치 그룹 (`batch_group` 값 있음)
@@ -66,6 +69,7 @@ DB의 `crawlers` 테이블을 다시 읽어 스케줄러 잡을 갱신한다(`sy
 | `DATABASE_URL` | (필수) | PostgreSQL 연결 문자열 |
 | `MAX_FAIL_COUNT` | 5 | 연속 실패 시 크롤러를 자동 비활성화하는 기준 |
 | `SUMMARIZE_CONCURRENCY` | 4 | watch-ai 호출 동시성 제한 (`asyncio.Semaphore`) |
+| `MAX_SUMMARY_ATTEMPTS` | 3 | 요약이 이 횟수만큼 연속 실패하면 포기하고 링크만 발송 (크롤 사이클 단위 재시도) |
 | `WATCH_AI_URL` | `http://watch-ai:8080` | |
 | `WATCH_SENDER_URL` | `http://watch-sender:8080` | |
 

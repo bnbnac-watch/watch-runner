@@ -82,3 +82,12 @@ async def clear_summary_attempts(crawler_id: int, item_id: str):
             "DELETE FROM pending_summaries WHERE crawler_id = $1 AND item_id = $2",
             crawler_id, item_id,
         )
+
+
+async def get_job(job_id) -> dict | None:
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, status, result, error, retryable FROM async_jobs WHERE id = $1",
+            job_id,
+        )
+        return dict(row) if row else None

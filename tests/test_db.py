@@ -1,4 +1,28 @@
+import uuid
+
 import db
+
+
+async def test_get_job_returns_row_as_dict(fake_pool, fake_conn, monkeypatch):
+    monkeypatch.setattr(db, "_pool", fake_pool)
+    job_id = uuid.uuid4()
+    fake_conn.fetchrow_return = {
+        "id": job_id, "status": "done", "result": {"result": "요약"},
+        "error": None, "retryable": True,
+    }
+
+    row = await db.get_job(job_id)
+
+    assert row["status"] == "done"
+    assert row["result"] == {"result": "요약"}
+
+
+async def test_get_job_returns_none_when_missing(fake_pool, fake_conn, monkeypatch):
+    monkeypatch.setattr(db, "_pool", fake_pool)
+
+    row = await db.get_job(uuid.uuid4())
+
+    assert row is None
 
 
 async def test_increment_fail_count_writes_error_message(fake_pool, fake_conn, monkeypatch):

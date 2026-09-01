@@ -45,7 +45,11 @@ async def _fallback_poll_loop():
     while True:
         await asyncio.sleep(FALLBACK_POLL_INTERVAL_S)
         for job_id in list(_pending.keys()):
-            row = await db.get_job(job_id)
+            try:
+                row = await db.get_job(job_id)
+            except Exception as exc:
+                logger.warning("폴백 폴링 중 job 조회 실패 (%s): %s", job_id, exc)
+                continue
             if row is not None and row["status"] != "pending":
                 _resolve(job_id, row)
 

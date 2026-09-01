@@ -95,3 +95,29 @@ async def test_fallback_poll_resolves_completed_pending_jobs(monkeypatch):
     poll_task.cancel()
 
     assert fut.done()
+
+
+async def test_fallback_poll_continues_after_one_job_lookup_fails(monkeypatch):
+    bad_job_id = str(uuid.uuid4())
+    good_job_id = str(uuid.uuid4())
+    bad_fut = asyncio.get_event_loop().create_future()
+    good_fut = asyncio.get_event_loop().create_future()
+    jobs._pending[bad_job_id] = bad_fut
+    jobs._pending[good_job_id] = good_fut
+
+    async def fake_get_job(jid):
+        if jid == bad_job_id:
+            raise RuntimeError("db 연결 끊김")
+        return {"status": "done", "result": {"result": "요약"}}
+    monkeypatch.setattr(jobs.db, "get_job", fake_get_job)
+    monkeypatch.setattr(jobs, "FALLBACK_POLL_INTERVAL_S", 0.01)
+
+    poll_task = asyncio.create_task(jobs._fallback_poll_loop())
+    await asyncio.sleep(0.03)
+
+    assert not poll_task.done()  # 루프가 예외로 죽지 않고 계속 살아있어야 함
+    poll_task.cancel()
+
+    assert not bad_fut.done()
+    assert good_fut.done()
+    assert good_fut.result()["status"] == "done"

@@ -1,6 +1,5 @@
 import pytest
 
-import jobs
 import main
 
 

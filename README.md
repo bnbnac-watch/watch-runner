@@ -68,7 +68,6 @@ DB의 `crawlers` 테이블을 다시 읽어 스케줄러 잡을 갱신한다(`sy
 |---|---|---|
 | `DATABASE_URL` | (필수) | PostgreSQL 연결 문자열 |
 | `MAX_FAIL_COUNT` | 5 | 연속 실패 시 크롤러를 자동 비활성화하는 기준 |
-| `SUMMARIZE_CONCURRENCY` | 4 | watch-ai 호출 동시성 제한 (`asyncio.Semaphore`) |
 | `MAX_SUMMARY_ATTEMPTS` | 3 | 요약이 이 횟수만큼 연속 실패하면 포기하고 링크만 발송 (크롤 사이클 단위 재시도) |
 | `WATCH_AI_URL` | `http://watch-ai:8080` | |
 | `WATCH_SENDER_URL` | `http://watch-sender:8080` | |

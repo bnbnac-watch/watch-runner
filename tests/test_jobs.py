@@ -56,6 +56,19 @@ async def test_wait_for_job_times_out_and_cleans_up_pending(monkeypatch):
     assert job_id not in jobs._pending
 
 
+async def test_wait_for_job_returns_none_and_cleans_up_on_db_error(monkeypatch):
+    job_id = str(uuid.uuid4())
+
+    async def fake_get_job(jid):
+        raise RuntimeError("connection reset")
+    monkeypatch.setattr(jobs.db, "get_job", fake_get_job)
+
+    row = await jobs.wait_for_job(job_id, timeout=1)
+
+    assert row is None
+    assert job_id not in jobs._pending
+
+
 async def test_on_pg_notify_resolves_matching_future(monkeypatch):
     job_id = str(uuid.uuid4())
     fut = asyncio.get_event_loop().create_future()

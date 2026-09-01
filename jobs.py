@@ -19,7 +19,7 @@ def _resolve(job_id: str, row: dict):
 
 
 async def wait_for_job(job_id: str, timeout: int = 300) -> dict | None:
-    fut = asyncio.get_event_loop().create_future()
+    fut = asyncio.get_running_loop().create_future()
     _pending[job_id] = fut
     try:
         row = await db.get_job(job_id)
@@ -29,6 +29,9 @@ async def wait_for_job(job_id: str, timeout: int = 300) -> dict | None:
         return await asyncio.wait_for(fut, timeout=timeout)
     except asyncio.TimeoutError:
         logger.warning("job 대기 타임아웃 (%s)", job_id)
+        return None
+    except Exception as exc:
+        logger.warning("job 대기 중 오류 (%s): %s", job_id, exc)
         return None
     finally:
         _pending.pop(job_id, None)
@@ -73,7 +76,10 @@ async def start_listener(dsn: str) -> asyncio.Task:
                 logger.warning("job 리스너 커넥션 오류: %s", exc)
             finally:
                 if conn is not None and not conn.is_closed():
-                    await conn.close()
+                    try:
+                        await conn.close()
+                    except Exception as exc:
+                        logger.warning("job 리스너 커넥션 종료 중 오류: %s", exc)
             await asyncio.sleep(5)
 
     return asyncio.create_task(_run())

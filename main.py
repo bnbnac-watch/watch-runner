@@ -56,10 +56,10 @@ class _PermanentSummaryFailure(Exception):
 
 async def _call_summarize_api(url: str) -> str | None:
     # job 생성 요청은 가벼운 INSERT + 202 응답이라 10초면 충분하다. 실제 요약
-    # 작업 대기는 jobs.wait_for_job의 300초 상한이 담당 — watch-ai의
-    # AI_CONCURRENCY 큐잉이 아무리 길어져도 여기서 응답을 조용히 유실하지
-    # 않는다(대기만 하다 300초를 넘기면 None을 반환해 기존 pending_summaries
-    # 재시도 로직으로 넘어간다).
+    # 작업 대기는 jobs.wait_for_job의 300초 상한이 담당. watch-ai 큐잉이
+    # 300초를 넘기면 이 호출은 포기하고 None을 반환한다 — pending_summaries가
+    # 다음 크롤 사이클에 재시도한다. 유실은 없지만(재시도되므로), 300초 안에
+    # 못 끝난 job이 뒤늦게 완료되면 그 Gemini 호출은 낭비된다(재사용 안 함).
     try:
         res = await _http_client.post(f"{WATCH_AI_URL}/summarize", json={"url": url}, timeout=10)
         res.raise_for_status()
@@ -75,6 +75,7 @@ async def _call_summarize_api(url: str) -> str | None:
         return row["result"]["result"]
     if not row["retryable"]:
         raise _PermanentSummaryFailure(row["error"])
+    logger.warning("watch-ai 요약 실패 (%s): %s", url, row["error"])
     return None
 
 

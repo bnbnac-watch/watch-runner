@@ -1,3 +1,6 @@
+import pytest
+
+import jobs
 import main
 
 
@@ -165,3 +168,70 @@ async def test_run_crawler_does_not_notify_or_mark_seen_when_summary_held_back(m
 
     assert notified == []
     assert marked_seen == []
+
+
+class _FakeSummarizeResponse:
+    def __init__(self, job_id="job-1"):
+        self._job_id = job_id
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"job_id": self._job_id}
+
+
+async def test_call_summarize_api_returns_result_on_done(monkeypatch):
+    async def fake_post(url, json, timeout):
+        return _FakeSummarizeResponse()
+    monkeypatch.setattr(main, "_http_client", type("C", (), {"post": staticmethod(fake_post)})())
+
+    async def fake_wait_for_job(job_id, timeout):
+        assert job_id == "job-1"
+        return {"status": "done", "result": {"result": "요약"}}
+    monkeypatch.setattr(main.jobs, "wait_for_job", fake_wait_for_job)
+
+    result = await main._call_summarize_api("https://x")
+
+    assert result == "요약"
+
+
+async def test_call_summarize_api_raises_permanent_failure_when_not_retryable(monkeypatch):
+    async def fake_post(url, json, timeout):
+        return _FakeSummarizeResponse()
+    monkeypatch.setattr(main, "_http_client", type("C", (), {"post": staticmethod(fake_post)})())
+
+    async def fake_wait_for_job(job_id, timeout):
+        return {"status": "failed", "retryable": False, "error": "자막 없음"}
+    monkeypatch.setattr(main.jobs, "wait_for_job", fake_wait_for_job)
+
+    with pytest.raises(main._PermanentSummaryFailure):
+        await main._call_summarize_api("https://x")
+
+
+async def test_call_summarize_api_returns_none_when_wait_times_out(monkeypatch):
+    async def fake_post(url, json, timeout):
+        return _FakeSummarizeResponse()
+    monkeypatch.setattr(main, "_http_client", type("C", (), {"post": staticmethod(fake_post)})())
+
+    async def fake_wait_for_job(job_id, timeout):
+        return None
+    monkeypatch.setattr(main.jobs, "wait_for_job", fake_wait_for_job)
+
+    result = await main._call_summarize_api("https://x")
+
+    assert result is None
+
+
+async def test_call_summarize_api_returns_none_on_transient_failure(monkeypatch):
+    async def fake_post(url, json, timeout):
+        return _FakeSummarizeResponse()
+    monkeypatch.setattr(main, "_http_client", type("C", (), {"post": staticmethod(fake_post)})())
+
+    async def fake_wait_for_job(job_id, timeout):
+        return {"status": "failed", "retryable": True, "error": "요약 시간 초과"}
+    monkeypatch.setattr(main.jobs, "wait_for_job", fake_wait_for_job)
+
+    result = await main._call_summarize_api("https://x")
+
+    assert result is None

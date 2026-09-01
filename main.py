@@ -10,6 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import db
 import executor
 import deduplicator
+import jobs
 from scheduler import create_scheduler, sync_jobs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -20,7 +21,6 @@ MAX_FAIL_COUNT = int(os.getenv("MAX_FAIL_COUNT", "5"))
 # 재시도는 크롤 사이클 단위로 일어나므로(watch-ai 자체 재시도와 별개),
 # 실제 최대 지연 시간은 이 값 × 해당 크롤러의 크롤 주기다.
 MAX_SUMMARY_ATTEMPTS = int(os.getenv("MAX_SUMMARY_ATTEMPTS", "3"))
-SUMMARIZE_CONCURRENCY = int(os.getenv("SUMMARIZE_CONCURRENCY", "4"))
 WATCH_AI_URL = os.getenv("WATCH_AI_URL", "http://watch-ai:8080")
 WATCH_SENDER_URL = os.getenv("WATCH_SENDER_URL", "http://watch-sender:8080")
 WATCH_GALLERY_URL = os.getenv("WATCH_GALLERY_URL", "http://watch-gallery:8080")
@@ -29,8 +29,6 @@ WATCH_GALLERY_URL = os.getenv("WATCH_GALLERY_URL", "http://watch-gallery:8080")
 # 컨테이너 이름으로 판단 - 두 번째 크롤러가 필요해지면 crawlers 테이블에 플래그를
 # 추가하는 걸 고려할 것.
 IMAGE_CAPABLE_CONTAINERS = {"crawler-kakao-channels"}
-
-_summarize_sem = asyncio.Semaphore(SUMMARIZE_CONCURRENCY)
 
 _scheduler: AsyncIOScheduler | None = None
 _http_client: httpx.AsyncClient | None = None
@@ -57,22 +55,27 @@ class _PermanentSummaryFailure(Exception):
 
 
 async def _call_summarize_api(url: str) -> str | None:
-    async with _summarize_sem:
-        try:
-            # watch-ai의 SUMMARIZE_TIMEOUT_S(기본 110s)보다 반드시 커야 한다 — 안 그러면
-            # 이 타임아웃이 watch-ai가 스스로 포기하기 전에 먼저 끊어버려서, watch-ai
-            # 서버 쪽에 아무도 기다리지 않는 요청만 남기고 세마포어 슬롯을 낭비하게 된다.
-            res = await _http_client.post(f"{WATCH_AI_URL}/summarize", json={"url": url}, timeout=120)
-            res.raise_for_status()
-            return res.json().get("result")
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                raise _PermanentSummaryFailure(str(e)) from e
-            logger.error("watch-ai 호출 실패 (%s): %s", url, e)
-            return None
-        except Exception as e:
-            logger.error("watch-ai 호출 실패 (%s): %s", url, e)
-            return None
+    # job 생성 요청은 가벼운 INSERT + 202 응답이라 10초면 충분하다. 실제 요약
+    # 작업 대기는 jobs.wait_for_job의 300초 상한이 담당 — watch-ai의
+    # AI_CONCURRENCY 큐잉이 아무리 길어져도 여기서 응답을 조용히 유실하지
+    # 않는다(대기만 하다 300초를 넘기면 None을 반환해 기존 pending_summaries
+    # 재시도 로직으로 넘어간다).
+    try:
+        res = await _http_client.post(f"{WATCH_AI_URL}/summarize", json={"url": url}, timeout=10)
+        res.raise_for_status()
+        job_id = res.json()["job_id"]
+    except Exception as e:
+        logger.error("watch-ai 요청 실패 (%s): %s", url, e)
+        return None
+
+    row = await jobs.wait_for_job(job_id, timeout=300)
+    if row is None:
+        return None
+    if row["status"] == "done":
+        return row["result"]["result"]
+    if not row["retryable"]:
+        raise _PermanentSummaryFailure(row["error"])
+    return None
 
 
 async def _summarize(url: str) -> str | None:
@@ -261,10 +264,14 @@ async def lifespan(app: FastAPI):
     async with httpx.AsyncClient() as client:
         _http_client = client
         executor.set_client(client)
+        listener_task = await jobs.start_listener(os.environ["DATABASE_URL"])
+        fallback_task = jobs.start_fallback_poll()
         _scheduler = await create_scheduler(run_crawler, run_batch)
         _scheduler.start()
         yield
         _scheduler.shutdown()
+        listener_task.cancel()
+        fallback_task.cancel()
 
 
 app = FastAPI(lifespan=lifespan)

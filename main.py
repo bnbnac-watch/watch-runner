@@ -161,6 +161,11 @@ async def _build_image_grid(image_urls: list[str]) -> str | None:
 async def _attach_image_summaries(container: str, items: list[dict]):
     # watch-playwright가 단일 동시성이라(MAX_CONCURRENCY=1), 여기서도 순차 처리해
     # 렌더 요청이 한꺼번에 몰리지 않게 한다.
+    #
+    # summary가 아니라 별도 필드(image_grid_url)에 담는다 - summary는 원본 url을
+    # 이미 포함하고 있다는 전제(YouTube 요약이 타임스탬프에 {url}을 인라인으로
+    # 박아 넣는 방식)로 formatters.format_items가 summary 있으면 url을 생략하는데,
+    # 그리드 url은 원본 게시글 url이 아니라서 여기 합치면 게시글 url이 통째로 사라진다.
     for item in items:
         image_urls = await _extract_images(container, item["url"])
         if not image_urls:
@@ -168,7 +173,7 @@ async def _attach_image_summaries(container: str, items: list[dict]):
         grid_url = await _build_image_grid(image_urls)
         if not grid_url:
             continue
-        item["summary"] = f"{item['summary']}\n{grid_url}" if item.get("summary") else grid_url
+        item["image_grid_url"] = grid_url
 
 
 def _apply_filter(crawler: dict, items: list[dict]) -> list[dict]:

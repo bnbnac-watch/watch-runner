@@ -120,6 +120,48 @@ async def test_resolve_summaries_mixed_batch_routes_each_item_correctly(monkeypa
     assert cleared == ["ok", "giveup"]
 
 
+async def test_attach_image_summaries_sets_separate_field_without_touching_summary(monkeypatch):
+    async def fake_extract(container, url):
+        return ["https://img/1.jpg"]
+    monkeypatch.setattr(main, "_extract_images", fake_extract)
+
+    async def fake_build(image_urls):
+        return "https://watch-gallery/grid/abc"
+    monkeypatch.setattr(main, "_build_image_grid", fake_build)
+
+    items = [{"id": "p1", "url": "https://pf.kakao.com/x/1", "title": "t", "summary": "요약"}]
+    await main._attach_image_summaries("crawler-kakao-channels", items)
+
+    assert items[0]["summary"] == "요약"  # summary는 건드리지 않는다
+    assert items[0]["image_grid_url"] == "https://watch-gallery/grid/abc"
+
+
+async def test_attach_image_summaries_skips_field_when_no_images(monkeypatch):
+    async def fake_extract(container, url):
+        return []
+    monkeypatch.setattr(main, "_extract_images", fake_extract)
+
+    items = [{"id": "p1", "url": "https://pf.kakao.com/x/1", "title": "t"}]
+    await main._attach_image_summaries("crawler-kakao-channels", items)
+
+    assert "image_grid_url" not in items[0]
+
+
+async def test_attach_image_summaries_skips_field_when_grid_build_fails(monkeypatch):
+    async def fake_extract(container, url):
+        return ["https://img/1.jpg"]
+    monkeypatch.setattr(main, "_extract_images", fake_extract)
+
+    async def fake_build(image_urls):
+        return None
+    monkeypatch.setattr(main, "_build_image_grid", fake_build)
+
+    items = [{"id": "p1", "url": "https://pf.kakao.com/x/1", "title": "t"}]
+    await main._attach_image_summaries("crawler-kakao-channels", items)
+
+    assert "image_grid_url" not in items[0]
+
+
 async def test_summarize_returns_none_on_permanent_failure(monkeypatch):
     async def fake_call(url):
         raise main._PermanentSummaryFailure("404 자막 없음")

@@ -40,12 +40,16 @@ async def get_crawlers_by_batch_group(group: str) -> list[dict]:
         return [dict(r) for r in rows]
 
 
-async def update_success(crawler_id: int):
+async def update_success(crawler_id: int) -> int:
+    """리셋 직전의 fail_count를 반환한다. 오류 알림이 나갔던 크롤러의 복구 알림 판단에 쓴다."""
     async with _pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE crawlers SET last_run = NOW(), fail_count = 0, last_error = NULL WHERE id = $1",
+        row = await conn.fetchrow(
+            "UPDATE crawlers AS c SET last_run = NOW(), fail_count = 0, last_error = NULL "
+            "FROM (SELECT id, fail_count FROM crawlers WHERE id = $1 FOR UPDATE) AS prev "
+            "WHERE c.id = prev.id RETURNING prev.fail_count AS prev_fail_count",
             crawler_id,
         )
+        return row["prev_fail_count"] if row else 0
 
 
 async def increment_fail_count(crawler_id: int, error_msg: str) -> int:

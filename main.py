@@ -17,6 +17,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 MAX_FAIL_COUNT = int(os.getenv("MAX_FAIL_COUNT", "5"))
+# 일시적 실패(다음 실행에서 자동 복구)가 운영 채널을 어지럽히지 않도록 이 횟수째 연속 실패에
+# 딱 한 번만 알린다. 자동 비활성화(MAX_FAIL_COUNT)는 이 값과 무관하게 항상 알린다.
+ALERT_FAIL_THRESHOLD = int(os.getenv("ALERT_FAIL_THRESHOLD", "3"))
 # 요약이 이 횟수만큼 연속 실패하면 포기하고 요약 없이(링크만) 발송한다.
 # 재시도는 크롤 사이클 단위로 일어나므로(watch-ai 자체 재시도와 별개),
 # 실제 최대 지연 시간은 이 값 × 해당 크롤러의 크롤 주기다.
@@ -42,10 +45,18 @@ async def _notify_items(crawler_id: str, items: list[dict]):
     )
 
 
-async def _notify_error(crawler_id: str, error: str, fail_count: int):
+async def _notify_error(crawler_id: str, error: str, fail_count: int, disabled: bool = False):
     await _http_client.post(
         f"{WATCH_SENDER_URL}/error",
-        json={"crawler_id": crawler_id, "error": error, "fail_count": fail_count},
+        json={"crawler_id": crawler_id, "error": error, "fail_count": fail_count, "disabled": disabled},
+        timeout=10,
+    )
+
+
+async def _notify_recovered(crawler_id: str, previous_fail_count: int):
+    await _http_client.post(
+        f"{WATCH_SENDER_URL}/recovered",
+        json={"crawler_id": crawler_id, "previous_fail_count": previous_fail_count},
         timeout=10,
     )
 
@@ -212,17 +223,27 @@ async def run_crawler(crawler: dict):
             if new_items:
                 await _notify_items(crawler_id, new_items)
                 await deduplicator.mark_seen(crawler_id, [item["id"] for item in new_items])
-        await db.update_success(crawler_id)
+        previous_fail_count = await db.update_success(crawler_id)
         logger.info("[%s] job 완료", crawler_id)
     except Exception as e:
         logger.error("[%s] 오류: %s", crawler_id, e)
         fail_count = await db.increment_fail_count(crawler_id, str(e))
+        disabled = fail_count >= MAX_FAIL_COUNT
+        if disabled or fail_count == ALERT_FAIL_THRESHOLD:
+            try:
+                await _notify_error(crawler_id, str(e), fail_count, disabled=disabled)
+            except Exception:
+                pass
+        if disabled:
+            await db.disable_crawler(crawler_id)
+        return
+
+    # 복구 알림은 try 밖에서 보낸다 — 발송 실패가 크롤러 실패로 집계되면 안 된다.
+    if previous_fail_count >= ALERT_FAIL_THRESHOLD:
         try:
-            await _notify_error(crawler_id, str(e), fail_count)
+            await _notify_recovered(crawler_id, previous_fail_count)
         except Exception:
             pass
-        if fail_count >= MAX_FAIL_COUNT:
-            await db.disable_crawler(crawler_id)
 
 
 async def run_batch(group_name: str):

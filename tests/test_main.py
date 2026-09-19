@@ -202,13 +202,187 @@ async def test_run_crawler_does_not_notify_or_mark_seen_when_summary_held_back(m
     monkeypatch.setattr(main.deduplicator, "mark_seen", fake_mark_seen)
 
     async def fake_update_success(crawler_id):
-        pass
+        return 0
     monkeypatch.setattr(main.db, "update_success", fake_update_success)
 
     await main.run_crawler(crawler)
 
     assert notified == []
     assert marked_seen == []
+
+
+_CRAWLER = {"id": 4, "container": "crawler-kakao-channels"}
+
+
+def _stub_failing_crawl(monkeypatch, fail_count):
+    async def fake_execute(c):
+        raise Exception("render 실패 (500): Page.goto: Timeout 30000ms exceeded.")
+    monkeypatch.setattr(main.executor, "execute", fake_execute)
+
+    async def fake_increment(crawler_id, error):
+        return fail_count
+    monkeypatch.setattr(main.db, "increment_fail_count", fake_increment)
+
+    errors, disabled = [], []
+
+    async def fake_notify_error(crawler_id, error, count, disabled=False):
+        errors.append({"crawler_id": crawler_id, "fail_count": count, "disabled": disabled})
+    monkeypatch.setattr(main, "_notify_error", fake_notify_error)
+
+    async def fake_disable(crawler_id):
+        disabled.append(crawler_id)
+    monkeypatch.setattr(main.db, "disable_crawler", fake_disable)
+
+    monkeypatch.setattr(main, "ALERT_FAIL_THRESHOLD", 3)
+    monkeypatch.setattr(main, "MAX_FAIL_COUNT", 5)
+    return errors, disabled
+
+
+def _stub_successful_crawl(monkeypatch, previous_fail_count):
+    async def fake_execute(c):
+        return []
+    monkeypatch.setattr(main.executor, "execute", fake_execute)
+
+    async def fake_filter_new(crawler_id, items):
+        return []
+    monkeypatch.setattr(main.deduplicator, "filter_new", fake_filter_new)
+
+    async def fake_update_success(crawler_id):
+        return previous_fail_count
+    monkeypatch.setattr(main.db, "update_success", fake_update_success)
+
+    recovered = []
+
+    async def fake_notify_recovered(crawler_id, prev):
+        recovered.append((crawler_id, prev))
+    monkeypatch.setattr(main, "_notify_recovered", fake_notify_recovered)
+
+    monkeypatch.setattr(main, "ALERT_FAIL_THRESHOLD", 3)
+    return recovered
+
+
+@pytest.mark.parametrize("fail_count", [1, 2])
+async def test_run_crawler_stays_silent_below_alert_threshold(monkeypatch, fail_count):
+    errors, disabled = _stub_failing_crawl(monkeypatch, fail_count)
+
+    await main.run_crawler(_CRAWLER)
+
+    assert errors == []
+    assert disabled == []
+
+
+async def test_run_crawler_alerts_once_when_alert_threshold_reached(monkeypatch):
+    errors, disabled = _stub_failing_crawl(monkeypatch, 3)
+
+    await main.run_crawler(_CRAWLER)
+
+    assert errors == [{"crawler_id": 4, "fail_count": 3, "disabled": False}]
+    assert disabled == []
+
+
+async def test_run_crawler_stays_silent_between_threshold_and_disable(monkeypatch):
+    errors, disabled = _stub_failing_crawl(monkeypatch, 4)
+
+    await main.run_crawler(_CRAWLER)
+
+    assert errors == []
+    assert disabled == []
+
+
+async def test_run_crawler_alerts_and_disables_when_max_fail_count_reached(monkeypatch):
+    errors, disabled = _stub_failing_crawl(monkeypatch, 5)
+
+    await main.run_crawler(_CRAWLER)
+
+    assert errors == [{"crawler_id": 4, "fail_count": 5, "disabled": True}]
+    assert disabled == [4]
+
+
+async def test_run_crawler_sends_single_alert_when_threshold_equals_max_fail_count(monkeypatch):
+    errors, disabled = _stub_failing_crawl(monkeypatch, 5)
+    monkeypatch.setattr(main, "ALERT_FAIL_THRESHOLD", 5)
+
+    await main.run_crawler(_CRAWLER)
+
+    assert errors == [{"crawler_id": 4, "fail_count": 5, "disabled": True}]
+
+
+async def test_run_crawler_still_disables_when_error_alert_delivery_fails(monkeypatch):
+    errors, disabled = _stub_failing_crawl(monkeypatch, 5)
+
+    async def failing_notify_error(crawler_id, error, count, disabled=False):
+        raise RuntimeError("sender down")
+    monkeypatch.setattr(main, "_notify_error", failing_notify_error)
+
+    await main.run_crawler(_CRAWLER)
+
+    assert disabled == [4]
+
+
+async def test_run_crawler_announces_recovery_after_alerted_failures(monkeypatch):
+    recovered = _stub_successful_crawl(monkeypatch, previous_fail_count=3)
+
+    await main.run_crawler(_CRAWLER)
+
+    assert recovered == [(4, 3)]
+
+
+@pytest.mark.parametrize("previous_fail_count", [0, 1, 2])
+async def test_run_crawler_does_not_announce_recovery_below_alert_threshold(monkeypatch, previous_fail_count):
+    recovered = _stub_successful_crawl(monkeypatch, previous_fail_count)
+
+    await main.run_crawler(_CRAWLER)
+
+    assert recovered == []
+
+
+async def test_run_crawler_does_not_count_failed_recovery_alert_as_crawler_failure(monkeypatch):
+    _stub_successful_crawl(monkeypatch, previous_fail_count=3)
+
+    async def failing_notify_recovered(crawler_id, prev):
+        raise RuntimeError("sender down")
+    monkeypatch.setattr(main, "_notify_recovered", failing_notify_recovered)
+
+    increments = []
+    async def fake_increment(crawler_id, error):
+        increments.append(crawler_id)
+        return 1
+    monkeypatch.setattr(main.db, "increment_fail_count", fake_increment)
+
+    await main.run_crawler(_CRAWLER)
+
+    assert increments == []
+
+
+class _RecordingClient:
+    def __init__(self):
+        self.posts = []
+
+    async def post(self, url, json, timeout):
+        self.posts.append((url, json))
+
+
+async def test_notify_error_posts_disabled_flag_to_sender(monkeypatch):
+    client = _RecordingClient()
+    monkeypatch.setattr(main, "_http_client", client)
+
+    await main._notify_error(4, "boom", 5, disabled=True)
+
+    assert client.posts == [
+        (f"{main.WATCH_SENDER_URL}/error",
+         {"crawler_id": 4, "error": "boom", "fail_count": 5, "disabled": True}),
+    ]
+
+
+async def test_notify_recovered_posts_previous_fail_count_to_sender(monkeypatch):
+    client = _RecordingClient()
+    monkeypatch.setattr(main, "_http_client", client)
+
+    await main._notify_recovered(4, 3)
+
+    assert client.posts == [
+        (f"{main.WATCH_SENDER_URL}/recovered", {"crawler_id": 4, "previous_fail_count": 3}),
+    ]
 
 
 class _FakeSummarizeResponse:

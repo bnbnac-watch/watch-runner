@@ -38,13 +38,32 @@ async def test_increment_fail_count_writes_error_message(fake_pool, fake_conn, m
 
 
 async def test_update_success_clears_last_error(fake_pool, fake_conn, monkeypatch):
+    fake_conn.fetchrow_return = {"prev_fail_count": 0}
     monkeypatch.setattr(db, "_pool", fake_pool)
 
     await db.update_success(4)
 
-    query, args = fake_conn.execute_calls[0]
+    query, args = fake_conn.fetchrow_calls[0]
     assert "last_error = NULL" in query
     assert args == (4,)
+
+
+async def test_update_success_returns_fail_count_before_reset(fake_pool, fake_conn, monkeypatch):
+    fake_conn.fetchrow_return = {"prev_fail_count": 3}
+    monkeypatch.setattr(db, "_pool", fake_pool)
+
+    result = await db.update_success(4)
+
+    assert result == 3
+
+
+async def test_update_success_returns_zero_when_crawler_row_missing(fake_pool, fake_conn, monkeypatch):
+    fake_conn.fetchrow_return = None
+    monkeypatch.setattr(db, "_pool", fake_pool)
+
+    result = await db.update_success(4)
+
+    assert result == 0
 
 
 async def test_increment_summary_attempts_returns_new_count(fake_pool, fake_conn, monkeypatch):

@@ -68,6 +68,7 @@ DB의 `crawlers` 테이블을 다시 읽어 스케줄러 잡을 갱신한다(`sy
 |---|---|---|
 | `DATABASE_URL` | (필수) | PostgreSQL 연결 문자열 |
 | `MAX_FAIL_COUNT` | 5 | 연속 실패 시 크롤러를 자동 비활성화하는 기준 |
+| `ALERT_FAIL_THRESHOLD` | 3 | 이 횟수째 연속 실패에 운영 알림을 한 번만 보낸다 (아래 "실패 처리" 참고) |
 | `MAX_SUMMARY_ATTEMPTS` | 3 | 요약이 이 횟수만큼 연속 실패하면 포기하고 링크만 발송 (크롤 사이클 단위 재시도) |
 | `WATCH_AI_URL` | `http://watch-ai:8080` | |
 | `WATCH_SENDER_URL` | `http://watch-sender:8080` | |
@@ -80,7 +81,13 @@ DB의 `crawlers` 테이블을 다시 읽어 스케줄러 잡을 갱신한다(`sy
 
 ## 실패 처리
 
-크롤러 호출/파싱이 예외를 던지면 `fail_count`를 증가시키고 예외 메시지를 `crawlers.last_error`에 기록한 뒤 `watch-sender`의 `/error`로 알림을 보낸다. `fail_count`가 `MAX_FAIL_COUNT`에 도달하면 해당 크롤러를 `enabled=false`로 비활성화한다(다음 `/reload` 또는 재시작 시 스케줄러에서 빠짐). 성공 시 `fail_count`는 0으로 리셋되고 `last_error`도 `NULL`로 지워진다. `last_error`는 `watch-admin`의 크롤러 목록 화면에서 확인할 수 있다.
+크롤러 호출/파싱이 예외를 던지면 `fail_count`를 증가시키고 예외 메시지를 `crawlers.last_error`에 기록한다. 알림은 매 실패마다 보내지 않고, 일시적 실패(다음 실행에서 자동 복구)가 운영 채널을 어지럽히지 않도록 다음 시점에만 `watch-sender`로 보낸다.
+
+- `fail_count == ALERT_FAIL_THRESHOLD`(기본 3): `/error` 1회. 그 이후(4회, …)는 다음 항목 전까지 조용하다.
+- `fail_count >= MAX_FAIL_COUNT`(기본 5): 크롤러를 `enabled=false`로 비활성화(다음 `/reload` 또는 재시작 시 스케줄러에서 빠짐)하고 `/error`를 `disabled=true`로 발송. 임계치와 같은 횟수면 한 번만 나간다.
+- 알림이 나간 뒤(직전 `fail_count >= ALERT_FAIL_THRESHOLD`) 실행이 성공하면 `/recovered` 발송.
+
+알림 발송 실패는 무시한다(크롤러 실패로 집계되지 않음). `run_batch` 경로는 알림 로직이 없다. 성공 시 `fail_count`는 0으로 리셋되고 `last_error`도 `NULL`로 지워진다. `last_error`는 `watch-admin`의 크롤러 목록 화면에서 확인할 수 있다.
 
 ## 알려진 제약
 
